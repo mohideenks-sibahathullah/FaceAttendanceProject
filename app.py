@@ -1,84 +1,105 @@
 import streamlit as st
 import boto3
+import cv2
+import numpy as np
 from datetime import datetime
+from decimal import Decimal
 
-# CONFIGURATION
+# --- CONFIGURATION ---
+st.set_page_config(page_title="Employee Tracking System", page_icon="🏢", layout="wide")
+st.title("🏢 Employee Attendance & Tracking System")
+
+# AWS Constants
 REGION = "ap-south-1"
-COLLECTION_ID = "StudentAttendanceCollection"
 TABLE_NAME = "StudentAttendanceLog"
+COLLECTION_ID = "EmployeeFaces"
 
-# AWS Clients
+# Initialize AWS Clients
 rek_client = boto3.client('rekognition', region_name=REGION)
-db_client = boto3.resource('dynamodb', region_name=REGION)
-table = db_client.Table(TABLE_NAME)
+dynamodb = boto3.resource('dynamodb', region_name=REGION)
+table = dynamodb.Table(TABLE_NAME)
 
-st.title("Cloud Face Attendance System")
-st.write("M.Sc. Computer Science - Final Project")
+# --- APP LOGIC ---
 
-# Live Camera Input
-img_file_buffer = st.camera_input("Take a picture to mark attendance")
-
-if img_file_buffer is not None:
-    # Convert image to bytes for Rekognition
-    bytes_data = img_file_buffer.getvalue()
-    
-    with st.spinner("Validating Face and Marking Attendance..."):
-        try:
-            # 1. Validation: MASK & QUALITY
-            # We use DetectFaces with 'ALL' to get both quality and occlusion data
-            detect_resp = rek_client.detect_faces(Image={'Bytes': bytes_data}, Attributes=['ALL'])
-            
-            if not detect_resp['FaceDetails']:
-                st.error("No face detected. Please face the camera.")
-            else:
-                face = detect_resp['FaceDetails'][0]
-                # Custom Validation Logic
-                if face['FaceOccluded']['Value']:
-                    st.warning("FAILED: Please remove your face mask to mark attendance.")
-                elif face['Quality']['Sharpness'] < 30:
-                    st.warning("FAILED: Image too blurry. Possibly a spoof or billboard.")
-                else:
-                    # 2. Recognition: Search in Collection
-                    search_resp = rek_client.search_faces_by_image(
-                        CollectionId=COLLECTION_ID,
-                        Image={'Bytes': bytes_data},
-                        MaxFaces=1,
-                        FaceMatchThreshold=90
-                    )
-
-                    if search_resp['FaceMatches']:
-                        student_id = search_resp['FaceMatches'][0]['Face']['ExternalImageId']
-                        # LOG TO DATABASE
-                        table.put_item(Item={
-                            'StudentId': student_id,
-                            'Timestamp': datetime.now().isoformat(),
-                            'Status': 'Present'
-                        })
-                        st.success(f"SUCCESS: Attendance logged for {student_id}")
-                    else:
-                        st.error("FAILED: Identity not recognized. Please register first.")
-
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-
-# --- ADD THIS TO THE BOTTOM OF app.py ---
-st.divider()
-st.subheader("Today's Attendance Log")
-
-# Button to manually refresh the logs
-if st.button("Refresh Log"):
+def process_attendance(image_bytes):
     try:
-        # Scan the table to get all records
-        response = table.scan()
-        items = response.get('Items', [])
+        # 1. AI Face Search in Collection
+        response = rek_client.search_faces_by_image(
+            CollectionId=COLLECTION_ID,
+            Image={'Bytes': image_bytes},
+            MaxFaces=1,
+            FaceMatchThreshold=90
+        )
         
-        if items:
-            # Sort by timestamp (latest first)
-            sorted_items = sorted(items, key=lambda x: x['Timestamp'], reverse=True)
-            # Display as a clean table
-            st.table(sorted_items)
+        face_matches = response.get('FaceMatches', [])
+        
+        if not face_matches:
+            st.error("❌ Identity Not Recognized. Please Register first.")
+            return
+
+        # Extract Employee ID (Stored as ExternalImageId during registration)
+        employee_id = face_matches[0]['Face']['ExternalImageId']
+        confidence = face_matches[0]['Similarity']
+        
+        # 2. Check Today's History (Logic for Login/Logout)
+        today_date = datetime.now().strftime('%Y-%m-%d')
+        
+        # Query database for this specific employee
+        history = table.query(
+            KeyConditionExpression=boto3.dynamodb.conditions.Key('StudentId').eq(employee_id)
+        )
+        
+        # Filter for today's entries
+        today_entries = [item for item in history['Items'] if item['Timestamp'].startswith(today_date)]
+        
+        if len(today_entries) == 0:
+            action = "LOGIN"
+        elif len(today_entries) == 1:
+            action = "LOGOUT"
         else:
-            st.info("No attendance records found for today.")
-            
+            st.warning(f"⚠️ Employee {employee_id} has already completed their shift (Login & Logout) for today.")
+            return
+
+        # 3. Log the Event
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        table.put_item(Item={
+            'StudentId': employee_id,
+            'Timestamp': timestamp,
+            'Action': action,
+            'Confidence': Decimal(str(round(confidence, 2)))
+        })
+        
+        st.success(f"✅ {action} Successful for Employee: {employee_id} at {timestamp}")
+
     except Exception as e:
-        st.error(f"Error fetching logs: {str(e)}")
+        st.error(f"Error: {str(e)}")
+
+# --- USER INTERFACE ---
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.header("📸 Biometric Capture")
+    img_file = st.camera_input("Position your face in the center")
+    
+    if img_file:
+        bytes_data = img_file.getvalue()
+        process_attendance(bytes_data)
+
+with col2:
+    st.header("📊 Today's Attendance Log")
+    if st.button("🔄 Refresh Dashboard"):
+        try:
+            # For demonstration/Admin view, we scan the whole table
+            resp = table.scan()
+            items = resp.get('Items', [])
+            if items:
+                # Sort by timestamp latest first
+                items = sorted(items, key=lambda x: x['Timestamp'], reverse=True)
+                st.table(items)
+            else:
+                st.info("No records found.")
+        except Exception as e:
+            st.error(f"Table Read Error: {e}")
+
+st.info("💡 Note: This system automatically detects if you are logging in or out based on your daily history.")
