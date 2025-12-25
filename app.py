@@ -60,3 +60,25 @@ if img_file_buffer is not None:
 
         except Exception as e:
             st.error(f"Error: {str(e)}")
+
+# --- ADD THIS TO THE BOTTOM OF app.py ---
+st.divider()
+st.subheader("Today's Attendance Log")
+
+# Button to manually refresh the logs
+if st.button("Refresh Log"):
+    try:
+        # Scan the table to get all records
+        response = table.scan()
+        items = response.get('Items', [])
+        
+        if items:
+            # Sort by timestamp (latest first)
+            sorted_items = sorted(items, key=lambda x: x['Timestamp'], reverse=True)
+            # Display as a clean table
+            st.table(sorted_items)
+        else:
+            st.info("No attendance records found for today.")
+            
+    except Exception as e:
+        st.error(f"Error fetching logs: {str(e)}")
