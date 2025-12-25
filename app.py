@@ -27,7 +27,7 @@ if page == "👤 HR Onboarding":
     with st.form("reg_form"):
         c1, c2 = st.columns(2)
         with c1:
-            emp_id = st.text_input("Employee ID (Unique)")
+            emp_id = st.text_input("Employee ID")
             f_name = st.text_input("First Name")
             l_name = st.text_input("Last Name")
         with c2:
@@ -47,62 +47,63 @@ if page == "👤 HR Onboarding":
                 CollectionId=COLLECTION_ID, Image={'Bytes': photo.getvalue()},
                 ExternalImageId=emp_id, MaxFaces=1
             )
-            st.success(f"✅ Registered: {f_name} {l_name}")
+            st.success(f"✅ Registered: {f_name}")
         except Exception as e:
             st.error(f"Error: {str(e)}")
 
-# --- PAGE 2: ATTENDANCE (FAST-ACTION MODE) ---
+# --- PAGE 2: ATTENDANCE (ONE-STEP PROCESS) ---
 elif page == "📸 Mark Attendance":
     st.title("Smart Attendance Terminal")
-    st.info("Step 1: Snap Photo | Step 2: Press Action")
+    st.info("Stand in front of the camera and click your action button.")
     
-    # Large camera input for the terminal feel
-    img = st.camera_input("Employee Verification")
+    # The camera acts as a live feed
+    img = st.camera_input("Camera Feed", label_visibility="collapsed")
     
-    if img:
-        try:
-            # Automatic identification once photo is taken
-            search = rek_client.search_faces_by_image(
-                CollectionId=COLLECTION_ID, 
-                Image={'Bytes': img.getvalue()},
-                MaxFaces=1, 
-                FaceMatchThreshold=90
-            )
-            
-            if not search.get('FaceMatches'):
-                st.error("❌ Identity Not Found. Please register via HR.")
-            else:
-                eid = search['FaceMatches'][0]['Face']['ExternalImageId']
-                person = profile_db.get_item(Key={'EmployeeId': eid}).get('Item', {})
-                name = person.get('FirstName', 'Employee')
+    col_in, col_out = st.columns(2)
+    
+    # This function handles the "One-Step" logic
+    def handle_click(action_type):
+        if img:
+            try:
+                # 1. Identify the person from the current frame
+                search = rek_client.search_faces_by_image(
+                    CollectionId=COLLECTION_ID, 
+                    Image={'Bytes': img.getvalue()},
+                    MaxFaces=1, 
+                    FaceMatchThreshold=90
+                )
                 
-                # Big Welcome Header
-                st.markdown(f"### Welcome, {name}!")
-                st.write(f"Employee ID: {eid} | Location: {person.get('City')}")
-
-                # Action Buttons appear ONLY after identification
-                col_in, col_out = st.columns(2)
-                with col_in:
-                    if st.button("🚀 CLOCK IN", use_container_width=True, type="primary"):
-                        logs_db.put_item(Item={
-                            'EmployeeId': eid,
-                            'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'ActionType': 'LOGIN'
-                        })
-                        st.success("Punch-In Recorded!")
+                if not search.get('FaceMatches'):
+                    st.error("❌ Identity Not Found. Please see HR.")
+                else:
+                    eid = search['FaceMatches'][0]['Face']['ExternalImageId']
+                    person = profile_db.get_item(Key={'EmployeeId': eid}).get('Item', {})
+                    name = person.get('FirstName', 'Employee')
+                    
+                    # 2. Record the Attendance
+                    logs_db.put_item(Item={
+                        'EmployeeId': eid,
+                        'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        'ActionType': action_type
+                    })
+                    
+                    if action_type == "LOGIN":
+                        st.success(f"✅ Welcome, {name}! Clocked In.")
                         st.balloons()
+                    else:
+                        st.warning(f"✅ Goodbye, {name}! Clocked Out.")
+            except Exception as e:
+                st.error(f"System Error: {str(e)}")
+        else:
+            st.error("Please ensure your face is visible in the camera feed before clicking.")
 
-                with col_out:
-                    if st.button("🏠 CLOCK OUT", use_container_width=True):
-                        logs_db.put_item(Item={
-                            'EmployeeId': eid,
-                            'Timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'ActionType': 'LOGOUT'
-                        })
-                        st.warning("Punch-Out Recorded!")
+    with col_in:
+        if st.button("🚀 CLOCK IN", use_container_width=True, type="primary"):
+            handle_click("LOGIN")
 
-        except Exception as e:
-            st.error(f"System Error: {str(e)}")
+    with col_out:
+        if st.button("🏠 CLOCK OUT", use_container_width=True):
+            handle_click("LOGOUT")
 
 # --- PAGE 3: ADMIN DASHBOARD ---
 elif page == "📊 Admin Dashboard":
