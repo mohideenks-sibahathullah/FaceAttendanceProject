@@ -15,6 +15,20 @@ rekognition = boto3.client('rekognition', region_name=REGION)
 
 st.set_page_config(page_title="Self-Registration", page_icon="👤")
 
+# CSS to hide the sidebar and navigation for a clean employee view
+st.markdown("""
+    <style>
+        [data-testid="stSidebar"] {
+            display: none;
+        }
+        [data-testid="stSidebarNav"] {
+            display: none;
+        }
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("👤 Employee Self-Registration")
 st.write("Enter your ID to unlock the biometric registration.")
 
